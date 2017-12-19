@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/url"
+	pkgPath "path"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,11 +20,35 @@ import (
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/physical"
+	"os"
+	"sync"
 )
 
 // Unreserved tls key
 // Reserved values are "true", "false", "skip-verify"
-const mysqlTLSKey = "default"
+const (
+	mysqlTLSKey = "default"
+
+	// The lock TTL matches the default that Consul API uses, 15 seconds.
+	MySQLLockTTL = 15 * time.Second
+
+	// The amount of time to wait between the lock renewals
+	MySQLLockRenewInterval = 5 * time.Second
+
+	// MySQLLockPrefix is the prefix used to mark MySQL records
+	// as locks. This prefix causes them not to be returned by
+	// List operations.
+	MySQLLockPrefix = "_"
+	// MySQLLockRetryInterval is the amount of time to wait
+	// if a lock fails before trying again.
+	MySQLLockRetryInterval = time.Second
+	// MySQLWatchRetryMax is the number of times to re-try a
+	// failed watch before signaling that leadership is lost.
+	MySQLWatchRetryMax = 5
+	// MySQLWatchRetryInterval is the amount of time to wait
+	// if a watch fails before trying again.
+	MySQLWatchRetryInterval = 5 * time.Second
+)
 
 // MySQLBackend is a physical backend that stores data
 // within MySQL database.
@@ -31,8 +56,20 @@ type MySQLBackend struct {
 	dbTable    string
 	client     *sql.DB
 	statements map[string]*sql.Stmt
+	haEnabled  bool
 	logger     log.Logger
 	permitPool *physical.PermitPool
+}
+
+type MySQLLock struct {
+	backend            *MySQLBackend
+	value, key         string
+	identity           string
+	held               bool
+	lock               sync.Mutex
+	renewInterval      time.Duration
+	ttl                time.Duration
+	watchRetryInterval time.Duration
 }
 
 // NewMySQLBackend constructs a MySQL backend using the given API client and
@@ -66,6 +103,13 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 		table = "vault"
 	}
 	dbTable := database + "." + table
+	dbLockTable := dbTable + "_lock"
+
+	haEnabled := os.Getenv("MYSQL_HA_ENABLED")
+	if haEnabled == "" {
+		haEnabled = conf["ha_enabled"]
+	}
+	haEnabledBool, _ := strconv.ParseBool(haEnabled)
 
 	maxParStr, ok := conf["max_parallel"]
 	var maxParInt int
@@ -100,16 +144,23 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 
 	db.SetMaxOpenConns(maxParInt)
 
-	// Create the required database if it doesn't exists.
+	// Create the required database if it doesn't exist.
 	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + database); err != nil {
 		return nil, fmt.Errorf("failed to create mysql database: %v", err)
 	}
 
-	// Create the required table if it doesn't exists.
+	// Create the required table if it doesn't exist.
 	create_query := "CREATE TABLE IF NOT EXISTS " + dbTable +
 		" (vault_key varbinary(512), vault_value mediumblob, PRIMARY KEY (vault_key))"
 	if _, err := db.Exec(create_query); err != nil {
 		return nil, fmt.Errorf("failed to create mysql table: %v", err)
+	}
+
+	// Create the required lock table if it doesn't exist.
+	create_lock_query := "CREATE TABLE IF NOT EXISTS " + dbLockTable +
+		" (vault_lock_key varbinary(512), vault_lock_identity varchar(255), vault_lock_expires datetime, PRIMARY KEY (vault_lock_key))"
+	if _, err := db.Exec(create_lock_query); err != nil {
+		return nil, fmt.Errorf("failed to create mysql lock table: %v", err)
 	}
 
 	// Setup the backend.
@@ -117,6 +168,7 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 		dbTable:    dbTable,
 		client:     db,
 		statements: make(map[string]*sql.Stmt),
+		haEnabled:  haEnabledBool,
 		logger:     logger,
 		permitPool: physical.NewPermitPool(maxParInt),
 	}
@@ -128,6 +180,12 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 		"get":    "SELECT vault_value FROM " + dbTable + " WHERE vault_key = ?",
 		"delete": "DELETE FROM " + dbTable + " WHERE vault_key = ?",
 		"list":   "SELECT vault_key FROM " + dbTable + " WHERE vault_key LIKE ?",
+		"setLock": "INSERT INTO " + dbLockTable +
+			" VALUES( ?, ?, ? ) ON DUPLICATE KEY UPDATE " +
+			"vault_lock_identity=IF((vault_lock_identity = VALUES(vault_lock_identity) OR vault_lock_expires <= NOW()), VALUES(vault_lock_identity), vault_lock_identity), " +
+			"vault_lock_expires=IF((vault_lock_identity = VALUES(vault_lock_identity) OR vault_lock_expires <= NOW()), VALUES(vault_lock_expires), vault_lock_expires)",
+		"getLock":    "SELECT vault_lock_identity FROM " + dbLockTable + " WHERE vault_lock_key = ?",
+		"deleteLock": "DELETE FROM " + dbLockTable + " WHERE vault_lock_key = ?",
 	}
 	for name, query := range statements {
 		if err := m.prepare(name, query); err != nil {
@@ -234,6 +292,203 @@ func (m *MySQLBackend) List(prefix string) ([]string, error) {
 
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// LockWith is used for mutual exclusion based on the given key.
+func (d *MySQLBackend) LockWith(key, value string) (physical.Lock, error) {
+	return &MySQLLock{
+		backend:            d,
+		key:                pkgPath.Join(pkgPath.Dir(key), MySQLLockPrefix+pkgPath.Base(key)),
+		identity:           value,
+		renewInterval:      MySQLLockRenewInterval,
+		ttl:                MySQLLockTTL,
+		watchRetryInterval: MySQLWatchRetryInterval,
+	}, nil
+}
+
+// Lock tries to acquire the lock by repeatedly trying to create
+// a record in the MySQL table. It will block until either the
+// stop channel is closed or the lock could be acquired successfully.
+// The returned channel will be closed once the lock is deleted or
+// changed in the MySQL table.
+func (l *MySQLLock) Lock(stopCh <-chan struct{}) (doneCh <-chan struct{}, retErr error) {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	if l.held {
+		return nil, fmt.Errorf("lock already held")
+	}
+
+	done := make(chan struct{})
+	// close done channel even in case of error
+	defer func() {
+		if retErr != nil {
+			close(done)
+		}
+	}()
+
+	var (
+		stop    = make(chan struct{})
+		success = make(chan struct{})
+		errors  = make(chan error)
+		leader  = make(chan struct{})
+	)
+	// try to acquire the lock asynchronously
+	go l.tryToLock(stop, success, errors)
+
+	select {
+	case <-success:
+		l.held = true
+		// after acquiring it successfully, we must renew the lock periodically,
+		// and watch the lock in order to close the leader channel
+		// once it is lost.
+		go l.periodicallyRenewLock(leader)
+		go l.watch(leader)
+	case retErr = <-errors:
+		close(stop)
+		return nil, retErr
+	case <-stopCh:
+		close(stop)
+		return nil, nil
+	}
+
+	return leader, retErr
+}
+
+// Unlock releases the lock by deleting the lock record from the
+// MySQL table.
+func (l *MySQLLock) Unlock() error {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	if !l.held {
+		return nil
+	}
+
+	l.held = false
+
+	defer metrics.MeasureSince([]string{"mysql", "delete"}, time.Now())
+
+	m := l.backend
+	m.permitPool.Acquire()
+	defer m.permitPool.Release()
+
+	_, err := l.backend.statements["deleteLock"].Exec(l.key)
+
+	return err
+}
+
+// Value checks whether or not the lock is held by any instance of MySQLLock,
+// including this one, and returns the current value.
+func (l *MySQLLock) Value() (bool, string, error) {
+	var identity string
+	err := l.backend.statements["getLock"].QueryRow(l.key).Scan(&identity)
+	if err != nil {
+		return false, "", err
+	}
+	if identity == "" {
+		return false, "", nil
+	}
+
+	return true, identity, nil
+}
+
+func (d *MySQLBackend) HAEnabled() bool {
+	return d.haEnabled
+}
+
+// Attempts to put/update the mysql item using condition expressions to
+// evaluate the TTL.
+func (l *MySQLLock) writeItem() error {
+	expires := time.Now().Add(l.ttl).Format(time.RFC3339)
+
+	resp, err := l.backend.statements["setLock"].Exec(l.key, l.identity, expires)
+	if err != nil {
+		return err
+	}
+
+	result, err := resp.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		err = fmt.Errorf("conditional check failed")
+	}
+
+	return err
+}
+
+// tryToLock tries to create a new item in MySQL
+// every `MySQLLockRetryInterval`. As long as the item
+// cannot be created (because it already exists), it will
+// be retried. If the operation fails due to an error, it
+// is sent to the errors channel.
+// When the lock could be acquired successfully, the success
+// channel is closed.
+func (l *MySQLLock) tryToLock(stop, success chan struct{}, errors chan error) {
+	ticker := time.NewTicker(MySQLLockRetryInterval)
+
+	for {
+		select {
+		case <-stop:
+			ticker.Stop()
+		case <-ticker.C:
+			err := l.writeItem()
+			if err != nil {
+				if err.Error() != "conditional check failed" {
+					errors <- err
+					return
+				}
+			} else {
+				ticker.Stop()
+				close(success)
+				return
+			}
+		}
+	}
+}
+
+func (l *MySQLLock) periodicallyRenewLock(done chan struct{}) {
+	ticker := time.NewTicker(l.renewInterval)
+	for {
+		select {
+		case <-ticker.C:
+			l.writeItem()
+		case <-done:
+			ticker.Stop()
+			return
+		}
+	}
+}
+
+// watch checks whether the lock has changed in the
+// MySQL table and closes the leader channel if so.
+// The interval is set by `MySQLWatchRetryInterval`.
+// If an error occurs during the check, watch will retry
+// the operation for `MySQLWatchRetryMax` times and
+// close the leader channel if it can't succeed.
+func (l *MySQLLock) watch(lost chan struct{}) {
+	retries := MySQLWatchRetryMax
+
+	ticker := time.NewTicker(l.watchRetryInterval)
+WatchLoop:
+	for {
+		select {
+		case <-ticker.C:
+			var resp string
+			err := l.backend.statements["getLock"].QueryRow(l.key).Scan(&resp)
+			if err != nil {
+				retries--
+				if retries == 0 {
+					break WatchLoop
+				}
+				continue
+			}
+			if resp == "" || resp != l.identity {
+				break WatchLoop
+			}
+		}
+	}
+
+	close(lost)
 }
 
 // Establish a TLS connection with a given CA certificate
