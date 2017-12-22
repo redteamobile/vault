@@ -81,6 +81,21 @@ be later than the role max TTL.`,
 	return fields
 }
 
+// addEuiccCommonFields adds fields with help text specific to eUICC
+// certificate issuing and signing
+func addEuiccCommonFields(fields map[string]*framework.FieldSchema) map[string]*framework.FieldSchema {
+	fields = addIssueAndSignCommonFields(fields)
+
+	fields = addNonCACommonFields(fields)
+
+	fields["eid"] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: `The EID of the eUICC.`,
+	}
+
+	return fields
+}
+
 // addCACommonFields adds fields with help text specific to CA
 // certificate issuing and signing
 func addCACommonFields(fields map[string]*framework.FieldSchema) map[string]*framework.FieldSchema {

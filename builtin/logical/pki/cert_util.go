@@ -471,6 +471,107 @@ func generateCert(b *backend,
 	return parsedBundle, nil
 }
 
+func generateEuiccCert(b *backend,
+	role *roleEntry,
+	signingBundle *caInfoBundle,
+	req *logical.Request,
+	data *framework.FieldData) (*certutil.ParsedCertBundle, error) {
+
+	creationInfo, err := generateCreationBundle(b, role, signingBundle, nil, req, data)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &certutil.ParsedCertBundle{}
+
+	serialNumber, err := certutil.GenerateSerialNumber()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := certutil.GeneratePrivateKey(creationInfo.KeyType,
+		creationInfo.KeyBits,
+		result); err != nil {
+		return nil, err
+	}
+
+	subjKeyID, err := certutil.GetSubjKeyID(result.PrivateKey)
+	if err != nil {
+		return nil, errutil.InternalError{Err: fmt.Sprintf("error getting subject key ID: %s", err)}
+	}
+
+	eid := data.Get("eid").(string)
+	if eid == "" {
+		return nil, errutil.UserError{Err: `field "eid" is required`}
+	}
+
+	subject := pkix.Name{
+		CommonName:   creationInfo.CommonName,
+		Organization: creationInfo.Organization,
+		SerialNumber: eid,
+		Country:      []string{"CN"},
+	}
+
+	certTemplate := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject:      subject,
+		NotBefore:    time.Now().Add(-30 * time.Second),
+		NotAfter:     creationInfo.NotAfter,
+		IsCA:         false,
+		SubjectKeyId: subjKeyID,
+	}
+
+	// Add this before calling addKeyUsages
+	if creationInfo.SigningBundle == nil {
+		return nil, errutil.InternalError{Err: `signing bundle is required to issue eUICC certificate`}
+	}
+
+	addKeyUsages(creationInfo, certTemplate)
+
+	var certBytes []byte
+
+	switch creationInfo.SigningBundle.PrivateKeyType {
+	case certutil.RSAPrivateKey:
+		certTemplate.SignatureAlgorithm = x509.SHA256WithRSA
+	case certutil.ECPrivateKey:
+		certTemplate.SignatureAlgorithm = x509.ECDSAWithSHA256
+	}
+
+	caCert := creationInfo.SigningBundle.Certificate
+	certTemplate.AuthorityKeyId = caCert.SubjectKeyId
+
+	// Add certificate policy
+	certTemplate.PolicyIdentifiers = []asn1.ObjectIdentifier{
+		asn1.ObjectIdentifier{2, 23, 146, 1, 2, 1, 1},
+	}
+
+	certBytes, err = x509.CreateCertificate(rand.Reader, certTemplate, caCert, result.PrivateKey.Public(), creationInfo.SigningBundle.PrivateKey)
+
+	if err != nil {
+		return nil, errutil.InternalError{Err: fmt.Sprintf("unable to create certificate: %s", err)}
+	}
+
+	result.CertificateBytes = certBytes
+	result.Certificate, err = x509.ParseCertificate(certBytes)
+	if err != nil {
+		return nil, errutil.InternalError{Err: fmt.Sprintf("unable to parse created certificate: %s", err)}
+	}
+
+	if len(creationInfo.SigningBundle.Certificate.AuthorityKeyId) > 0 &&
+		!bytes.Equal(creationInfo.SigningBundle.Certificate.AuthorityKeyId, creationInfo.SigningBundle.Certificate.SubjectKeyId) {
+
+		result.CAChain = []*certutil.CertBlock{
+			&certutil.CertBlock{
+				Certificate: creationInfo.SigningBundle.Certificate,
+				Bytes:       creationInfo.SigningBundle.CertificateBytes,
+			},
+		}
+		result.CAChain = append(result.CAChain, creationInfo.SigningBundle.CAChain...)
+	}
+
+	return result, nil
+}
+
 // N.B.: This is only meant to be used for generating intermediate CAs.
 // It skips some sanity checks.
 func generateIntermediateCSR(b *backend,

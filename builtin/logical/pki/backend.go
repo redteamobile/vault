@@ -65,6 +65,7 @@ func Backend() *backend {
 			pathSignVerbatim(&b),
 			pathSign(&b),
 			pathIssue(&b),
+			pathEuiccIssue(&b),
 			pathRotateCRL(&b),
 			pathFetchCA(&b),
 			pathFetchCAChain(&b),
