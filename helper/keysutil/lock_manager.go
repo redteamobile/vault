@@ -41,6 +41,10 @@ type PolicyRequest struct {
 
 	// Whether to upsert
 	Upsert bool
+
+	PrivateKey string
+
+	PublicKey string
 }
 
 type LockManager struct {
@@ -275,6 +279,8 @@ func (lm *LockManager) getPolicyCommon(req PolicyRequest, lockType bool) (*Polic
 			Type:       req.KeyType,
 			Derived:    req.Derived,
 			Exportable: req.Exportable,
+			PrivateKey: req.PrivateKey,
+			PublicKey:  req.PublicKey,
 		}
 		if req.Derived {
 			p.KDF = Kdf_hkdf_sha256

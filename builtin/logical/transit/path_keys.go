@@ -86,6 +86,18 @@ When reading a key with key derivation enabled,
 if the key type supports public keys, this will
 return the public key for the given context.`,
 			},
+
+			"private_key": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "",
+				Description: `private key`,
+			},
+
+			"public_key": &framework.FieldSchema{
+				Type:        framework.TypeString,
+				Default:     "",
+				Description: `public key`,
+			},
 		},
 
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -116,6 +128,8 @@ func (b *backend) pathPolicyWrite(
 	convergent := d.Get("convergent_encryption").(bool)
 	keyType := d.Get("type").(string)
 	exportable := d.Get("exportable").(bool)
+	privateKey := d.Get("private_key").(string)
+	publicKey := d.Get("public_key").(string)
 
 	if !derived && convergent {
 		return logical.ErrorResponse("convergent encryption requires derivation to be enabled"), nil
@@ -127,7 +141,10 @@ func (b *backend) pathPolicyWrite(
 		Derived:    derived,
 		Convergent: convergent,
 		Exportable: exportable,
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
 	}
+
 	switch keyType {
 	case "aes256-gcm96":
 		polReq.KeyType = keysutil.KeyType_AES256_GCM96

@@ -1,8 +1,6 @@
 package transit_test
 
 import (
-	"testing"
-
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/audit"
 	"github.com/hashicorp/vault/builtin/audit/file"
@@ -10,6 +8,7 @@ import (
 	vaulthttp "github.com/hashicorp/vault/http"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/vault"
+	"testing"
 )
 
 func TestTransit_Issue_2958(t *testing.T) {
@@ -52,7 +51,8 @@ func TestTransit_Issue_2958(t *testing.T) {
 	}
 
 	_, err = client.Logical().Write("transit/keys/foo", map[string]interface{}{
-		"type": "ecdsa-p256",
+		"type":        "ecdsa-p256",
+		"private_key": "MHcCAQEEINg+xP5ajvttu0qAjRJeRBw3sHfNl/JXmdbjewNNphEFoAoGCCqGSM49AwEHoUQDQgAE1cgNgqv/ac4nWVgu3u5XrS8Qt21ycP2cO+l7oH7SxTeg2MbA8QbGe60kuZRvq/itymMhhSnQ6es7KTDm6D4YEQ==",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -39,24 +39,45 @@ func createBackendWithStorage(t *testing.T) (*backend, logical.Storage) {
 }
 
 func TestTransit_RSA(t *testing.T) {
-	testTransit_RSA(t, "rsa-2048")
-	testTransit_RSA(t, "rsa-4096")
+	testTransit_RSA(t, "rsa-2048", false)
+	testTransit_RSA(t, "rsa-4096", false)
+	testTransit_RSA(t, "rsa-2048", true)
+	testTransit_RSA(t, "rsa-4096", true)
+
 }
 
-func testTransit_RSA(t *testing.T, keyType string) {
+func testTransit_RSA(t *testing.T, keyType string, importKey bool) {
 	var resp *logical.Response
 	var err error
+	var pk string
+	var keyReq *logical.Request
+	pk_2048 := "MIIEowIBAAKCAQEAsuGqb+vhVgs6mwu+hhjFPpDz8atNbkq0sGekK5+xaF271XwBDvxNbujAhPqsMLCLeQzg+5c715Civ1IvnBLHsKHaaPnkD4vnjP06H5f+eJS/I88fCLOSrdbhFIy9Wwb7fxN3kcXR7GvfqJ9n58Ji0vSGyuQkjUMeyzFWn3+sok1U0e9Gany6lLepDwVI4YkEmyyZ95Pduk57UqRLdiL/9HuuY2REz+tpya1hlfiqujOdFJmmAXOjHhCPYUL0cn7vWbsP4WFDY69EpLD80y4uG9qsMCfARHiqFTz2krcehr0N1ld1ps4KGHLR78uAS3dU3HRmjoMhJdFMxtDYyb/LiQIDAQABAoIBAFKUiWlX3NQrJOgU+OTRJKXopyWHLpzfEiFqB0k4VN9YfnFk6NwxL9Im01HQo5NqvUip4GdlfvPaSrfGSkJkDRoG7lyOGHHw5XmaIa4aLhkemkr+wFX1CJ8GVyx0eKpAQ/R7WTTLvUjG2B7xUDeW7qZyypN51UH9nYayhUnm2ByojMJM7iznAl0w2e9z9KCJ0lrLi8+9Xh1iSplEN2gOQmKvGOeDFPSm4Vhh/lf4ipOaatkKyftLTppB/lEdnwcvWRyqGBGrwDN7Mvg8XlK7XKXbg+qA6ChfCPSw7Z11gbzKtX8wIyi+Zaq1QW3fYiPpWbrpV+piVtNWuqSBqpLTjr0CgYEA+S5BCxGXxv8qok4Th8yOIZF7RobZ4awf4dpVYo+POXpdgpCr642JrJGRYoOYPbq+mgaemAYGJr7TWMyPTkia7RQbl+oYLIBi5foTV9v7XQY8W2X3nHzkpEmpIXsF1feCH9GNcTvjSlE1X1dCrDv320pGIo7PF9qny4O78HaDkZMCgYEAt8bmTTPFxwQoGPxG1UIcAXflGsns2Oz8Bpm7fUcXR2Duv5rf+lu99cgPe/iSAUhrfTDyQSodhJVRxQLJBXmAOrn1BjIgr++ZCxS6PT6qjzXjjHwiDevibohrlDC0EvQ0dE+F/jdoXSA0Nw9tZ6IuSmnRtSwqc7UAUJ+0xK53D/MCgYACQisQwJ4RjaqDQhXnOzFmmHz3jK1Y4EiBsYrok8iGitdiIZGNVwEScVdR/0NX++NSXhD968AOhdhAi8oYuYu97lq5q8OAU8GRuAyI1VOX6kCNy4TNBEzGOGyyAv1wjQe+5hVUG2jZ+ZZ0QMQ372s1r5ynH4g8/RxcOdtwOILExQKBgAvsX6zKmx5aaq+UTpQvgdmmibq/Nxqr5X4YI03xetUquNK9naKEqUJ1BGwqqG5k4HRy5ITN0rRza6a4k4pDY8prnjYUsoI3rVpGsf6fPjmkaWsH8r2sfDhnqXMn5ccFCRIyxqLDvYWtPTYFTjfXEeHKE80JXIe9SpPwiK3qE9d5AoGBAOrYgJcA9PV2/0bemu+aKZ0ogLtaITp+cohyMFJohtxI8JpkhYz4qrMZj2mbB4tNknXU6ECt1wRDUbTgI28Iepne1K9zASqN4Qp9G0ZPuKvxHdO9z9PgKXxgplPIT67gv4wkNRdekPI5j0qCCfDjIyMit+l2IB3OQgCA1ghIJEEV"
 	b, storage := createBackendWithStorage(t)
-
-	keyReq := &logical.Request{
-		Path:      "keys/rsa",
-		Operation: logical.UpdateOperation,
-		Data: map[string]interface{}{
-			"type": keyType,
-		},
-		Storage: storage,
+	if importKey {
+		if keyType == keysutil.KeyType(keysutil.KeyType_RSA2048).String() {
+			pk = pk_2048
+		} else {
+			pk = "MIIJKAIBAAKCAgEAloU2oGM4lPVFSTJhoBh2AuVpq9jbiwos8IIY5wQXRik8IdfIh4jz5iDXA6CnfgEgU/ghnjyt+gH2+t64BzdGjrE3XdT9h6n+SrzFVlyKJXnvbNZRqjn5KUyBjbzHKyhTRRZXCwlXYoPPL6zSwnylHv2kFZAqqvplLHTUVQYa9jZZIM1l6/QuVpgRx17NGbXnUKfdrKKZe+VYj9KndlNePNigZoPznrhr06gNysfQDjMj1yMhEcGfqAgrTcxFV2+ujiKGlYl/hrjm6c0qOg8r5Atny6Btr/Y/zrxo/SBFdbXBZW1e1R/qT1hC4X3/UEDw1FGVvSxQgy6Dig/nav/YQ3UCRfslWUbD9ibMnh7OGUsHAadgOR0LwuCBGqybweCtVl+H6OAWyS/EyDxM8fcEjUeE6kOiEq9//T0/B2b162tPKJL66F9B6pvKTmDXECHnulXZpU4WFYqAKuZObSXsjqle+uOLhBnlG06OQ/w3Z4mBCyHU+umIlKC0XhdTigZoJzpz0S5BXUu6uaSe2bKRjTk55Bw1g7RUNw8/XRq/XK3h+WTTRB3r3NEUqctx/J9EvGLCgJRQ1VVeCa/DUOXAjURan/Ct65dL6cuxKpVS9ifgrMzSobFo5lMGem4cHGIQt/P/AUZT7c1ibGlxwqspmOY+auGub+Xc5C0VdE4JZVsCAwEAAQKCAgB7ITAlleUUXWu3TAJ2f2wSRG7kB/rYS5Oljxcl67/KQjMRkD5XOR4js9uP+Rzqw6sZZZLCqeq76F2MrSKnrH0If0nGdVSMZPBDXRak5gCQVaYZR1z4voHnWdFlC/d1g4BStMqxmYulaCPVYS/rryE4L87JYOy2fyzCaDPF9b+ah6zzW3KzyUUayz1H9XIcRSSbYybAcSbTJjMDPBSHg/1EEwVrtydUQJLcSs41gqzc4NLBy9fieZzMTRp3gtF6jD6jwPSNYTQ0Fg+3VIDli8Ggw/+9oFf6KJvb116fKoYHm45AFW8NMxVuoMndQj/X+7fGR5MRdC3MkgFCsG3jprTWgLcerCWlNL8sX9Dj+C2iz6QshSrSe026oA/SNbg/UoJSSc/ZMWeS8zv/H4L1Wn6tf5SU6i/ctVSbb9UwAtAexmAaymPMuQDz0aatHaSU9+Q8IMtdmFNfVf1LPU9PQzcwRcKT+8Urqy2dhL0HRotOxovYmyMnRWz5j77BQDz0y6d/BHVoe7/I7iKYBTvt9mL1j1/eKImScY/uwcJgGNpkXKFU49zZDgcLZVdFksKaVfpbEGprg+J4Qjma5wtyaWzPMU5kdFGVQ0uAjTCAF0UHYIEIvJ0Seus/pxgV752afiAWWmV0KaTfjl0jAlIz8v7zg7OeXVs99nGW99QrjC+OUQKCAQEAxbmDsKgr7YKGsh5AWq4WFTdPiUf3BQg8Luyb9gZCdBzHH+KY+3pefRf0zVvbqYA4kOn5jABbuhPZ5/1vBiS8wQ3RrL1Ckft9WejwhXA16Dh405pklOi/IRRsDkodXIybsaDPBECnRyu9x/dScN3zJ0zET8JiayAk7eIoN7JnyE7yv3nVwefwLmx+opXB3pA5gei7qX3hn9kOMO+lDpxP1OsQSOiSgS1VP8dACxf0W0UiwSOx8nxmR3LXbiZzuMy3YHbDQccUD6ICo2wBodluexhauflBW7eJRh0WOElTWGhbbCzSPsDKkcharlFltDTp02DYUC67j/EhXkfxpUByOQKCAQEAwuIYrAZCmdZqFDtJVAQmT5jd6dudlvNG1PsWaXt9/OjH/uiVj6N1W2LEPcCtaimvOY7rPcffkgCkJSTK1ktihU0OjbxNjHV7Wv7F5qm5sKbFN26/0K40spUiovZhPfUqQ5xpkLxieQzl9s/1aNKIEnws2UPgwNHFbFQ6W4FOquTSwxuTVEgFunK55M6gFdJBAqDkBynSNT8NriOgQHXnEQauLZmxiVZt86+peH6ayIFYYVDldLM2ZN6xw4TMw5j3aAZjL5niC53Bd/ZTauBjXyzLDHc2nA+B5M55Ta/cArnl87To0MLBHe0Bwr3jkLrm+lgz271kl6EF9qB0hLfEMwKCAQAoO0ovbNibWD6+CWfAy8FUic+WOF1r2bQdPCmz0qw84gomU74bFVgajgBStMkqYRuhaOpM8Vm4sAdbq/amQl1hzsUGJ/BesdRcsggWrrFZUfxL2hNzNTSGr5gZBD2bMkUPzI+y5tDiq2TPRmSw8IhkS7t6GyxZbc311Vmnk5aIbH/6M/kpnl8BozPVMzGibqg05b0hjKqXEtxPWsO0CFw6D6Zdn20H+chp1MoUN8iRtayPrgqsM2HAUf7Bu/M5+/WoHCI4xSAw2h89T2G5o/tV8qurQatp1RuKd6qow0rBJ2LKzQfumt3c8e55n7hZBZc6Wm9JSWkCrebDP1JM9KMJAoIBAQCK3moOSveyf6Nff0+lWr+iAKBBQIlvQzO6GKHD0IfabFX3Qu0wSZ4a3KpSBraL6+A896aRg5fAhkxxW2JeiaFOs7YnMYNhD2YzVVDYKSF0y6HE+loc7cYHa1YfIcnxSH4xZ4eh51uUPqiv00hgxYTJB0s+FqxVOiWgJ/Tdt6rDBANbnI7Dg/7w+UeVz9crNYO1x8g1gouT/bZV3HUY+esJquT7AYYNA1WeTBJLFoxdTC4aSnb3Taz4++dYF42B48KIkeSjytfUxzlRrmmKwxKMg3K9E0YKttIspSSzQxlXp/hATS2JdP3/wR98EavTOhvVUHzDnJXNpqSFNZlR6VEZAoIBACb+FKv/InNeiYFk338dOo61VAxVBvNnIvSEOw3AC/X3ryi00KoRhtCfnzspVXNzSDpTx2U+MjLUPCF3L2zBDiFnS8TvnCSjPnXcIn4b4RvoeagJhW2cfUDd8sxsajzYiG5Bd5V/56ZKrj5ALeQl8loNSyI7zv32dTraAhzCR7P6qqFSncNPi8E9Yw3wK90mW2POaB13MSFY+TolVXHXDFrHGW6eNtc9ln6ndXnCw8SF9wWWyqyJquSGgZSuLwJDY6fdkxunwavuuJUx4153nSZ2OJXXEGGMeX258QeGHR5ahrem9M8Q7ifA5Zh2X2VgzKgpgAKDSCdO1RLCLW5VWg4="
+		}
+		keyReq = &logical.Request{
+			Path:      "keys/rsa",
+			Operation: logical.UpdateOperation,
+			Data: map[string]interface{}{
+				"type":        keyType,
+				"private_key": pk,
+			},
+			Storage: storage,
+		}
+	} else {
+		keyReq = &logical.Request{
+			Path:      "keys/rsa",
+			Operation: logical.UpdateOperation,
+			Data: map[string]interface{}{
+				"type": keyType,
+			},
+			Storage: storage,
+		}
 	}
-
 	resp, err = b.HandleRequest(keyReq)
 	if err != nil || (resp != nil && resp.IsError()) {
 		t.Fatalf("bad: err: %v\nresp: %#v", err, resp)

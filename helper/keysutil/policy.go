@@ -210,6 +210,10 @@ type Policy struct {
 
 	// The type of key
 	Type KeyType `json:"type"`
+
+	PrivateKey string `json: "private_key"`
+
+	PublicKey string `json: "public_key"`
 }
 
 // ArchivedKeys stores old keys. This is used to keep the key loading time sane
@@ -951,14 +955,31 @@ func (p *Policy) Rotate(storage logical.Storage) error {
 	switch p.Type {
 	case KeyType_AES256_GCM96:
 		// Generate a 256bit key
-		newKey, err := uuid.GenerateRandomBytes(32)
+		newKey := make([]byte, 32)
+		if p.PrivateKey != "" {
+			newKey, err = base64.StdEncoding.DecodeString(p.PrivateKey)
+		} else {
+			newKey, err = uuid.GenerateRandomBytes(32)
+		}
 		if err != nil {
 			return err
 		}
 		entry.Key = newKey
 
 	case KeyType_ECDSA_P256:
-		privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		privKey := new(ecdsa.PrivateKey)
+		if p.PrivateKey != "" {
+			priBytes, err := base64.StdEncoding.DecodeString(p.PrivateKey)
+			if err != nil {
+				return fmt.Errorf("error decoding ec private key: %s", err)
+			}
+			privKey, err = x509.ParseECPrivateKey(priBytes)
+			if err != nil {
+				return fmt.Errorf("error parsing ec private key: %s", err)
+			}
+		} else {
+			privKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		}
 		if err != nil {
 			return err
 		}
@@ -980,9 +1001,22 @@ func (p *Policy) Rotate(storage logical.Storage) error {
 		entry.FormattedPublicKey = string(pemBytes)
 
 	case KeyType_ED25519:
-		pub, pri, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return err
+		pub := make([]byte, ed25519.PublicKeySize)
+		pri := make([]byte, ed25519.PrivateKeySize)
+		if p.PrivateKey != "" && p.PrivateKey != "" {
+			pub, err = base64.StdEncoding.DecodeString(p.PublicKey)
+			if err != nil {
+				return fmt.Errorf("error decoding public key: %s", err)
+			}
+			pri, err = base64.StdEncoding.DecodeString(p.PrivateKey)
+			if err != nil {
+				return fmt.Errorf("error decoding private key: %s", err)
+			}
+		} else {
+			pub, pri, err = ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return err
+			}
 		}
 		entry.Key = pri
 		entry.FormattedPublicKey = base64.StdEncoding.EncodeToString(pub)
@@ -992,8 +1026,23 @@ func (p *Policy) Rotate(storage logical.Storage) error {
 		if p.Type == KeyType_RSA4096 {
 			bitSize = 4096
 		}
-
-		entry.RSAKey, err = rsa.GenerateKey(rand.Reader, bitSize)
+		if p.PrivateKey != "" {
+			rsa := new(rsa.PrivateKey)
+			priBytes, err := base64.StdEncoding.DecodeString(p.PrivateKey)
+			if err != nil {
+				return err
+			}
+			rsa, err = x509.ParsePKCS1PrivateKey(priBytes)
+			if rsa.N.BitLen() != bitSize {
+				return fmt.Errorf("key length does not match")
+			}
+			if err != nil {
+				return err
+			}
+			entry.RSAKey = rsa
+		} else {
+			entry.RSAKey, err = rsa.GenerateKey(rand.Reader, bitSize)
+		}
 		if err != nil {
 			return err
 		}

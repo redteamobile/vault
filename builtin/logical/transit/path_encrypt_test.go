@@ -42,7 +42,6 @@ func TestTransit_BatchEncryptionCase1(t *testing.T) {
 	if err != nil || (resp != nil && resp.IsError()) {
 		t.Fatalf("err:%v resp:%#v", err, resp)
 	}
-
 	ciphertext := resp.Data["ciphertext"]
 
 	decData := map[string]interface{}{
