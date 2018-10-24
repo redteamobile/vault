@@ -143,6 +143,7 @@ func NewMySQLBackend(conf map[string]string, logger log.Logger) (physical.Backen
 	}
 
 	db.SetMaxOpenConns(maxParInt)
+	db.SetMaxIdleConns(0)
 
 	// Create the required database if it doesn't exist.
 	if _, err := db.Exec("CREATE DATABASE IF NOT EXISTS " + database); err != nil {
