@@ -33,6 +33,7 @@ update your API calls accordingly.
 * [Set Signed Intermediate](#set-signed-intermediate)
 * [Read Certificate](#read-certificate)
 * [Generate Certificate](#generate-certificate)
+* [Generate eUICC Certificate](#generate-euicc-certificate)
 * [Revoke Certificate](#revoke-certificate)
 * [Create/Update Role](#create-update-role)
 * [Read Role](#read-role)
@@ -608,6 +609,136 @@ $ curl \
   "warnings": "",
   "auth": null
 }
+```
+
+## Generate eUICC Certificate
+
+This endpoint generates a new set of eUICC credentials (private key and
+certificate) based on the role named in the endpoint. The issuing CA
+certificate is returned as well, so that only the root CA need be in a client's
+trust store.
+
+**The private key is _not_ stored. If you do not save the private key, you will
+need to request a new certificate.**
+
+| Method   | Path                         | Produces               |
+| :------- | :--------------------------- | :--------------------- |
+| `POST`   | `/pki/euicc/:name`           | `200 application/json` |
+
+### Parameters
+- `eid` `(string: <required>)` - Specifies eid of eUICC.
+
+- `name` `(string: <required>)` – Specifies the name of the role to create the
+  certificate against. This is part of the request URL.
+
+- `common_name` `(string: <required>)` – Specifies the requested CN for the
+  certificate. If the CN is allowed by role policy, it will be issued.
+
+- `alt_names` `(string: "")` – Specifies requested Subject Alternative Names, in
+  a comma-delimited list. These can be host names or email addresses; they will
+  be parsed into their respective fields. If any requested names do not match
+  role policy, the entire request will be denied.
+
+- `ip_sans` `(string: "")` – Specifies requested IP Subject Alternative Names,
+  in a comma-delimited list. Only valid if the role allows IP SANs (which is the
+  default).
+
+- `ttl` `(string: "")` – Specifies requested Time To Live. Cannot be greater
+  than the role's `max_ttl` value. If not provided, the role's `ttl` value will
+  be used. Note that the role values default to system values if not explicitly
+  set.
+
+- `format` `(string: "")` – Specifies the format for returned data. Can be
+  `pem`, `der`, or `pem_bundle`; defaults to `pem`. If `der`, the output is
+  base64 encoded. If `pem_bundle`, the `certificate` field will contain the
+  private key and certificate, concatenated; if the issuing CA is not a
+  Vault-derived self-signed root, this will be included as well.
+
+- `private_key_format` `(string: "")` – Specifies the format for marshaling the
+  private key. Defaults to `der` which will return either base64-encoded DER or
+  PEM-encoded DER, depending on the value of `format`. The other option is
+  `pkcs8` which will return the key marshalled as PEM-encoded PKCS8.
+
+- `exclude_cn_from_sans` `(bool: false)` – If true, the given `common_name` will
+  not be included in DNS or Email Subject Alternate Names (as appropriate).
+  Useful if the CN is not a hostname or email address, but is instead some
+  human-readable identifier.
+
+
+### Sample Payload
+
+```json
+{
+  "common_name": "eUICC",
+  "eid": "89001012012341234012345678901224",
+  "ttl": "876000h"
+}
+```
+
+### Sample Request
+
+```
+$ curl \
+    --header "X-Vault-Token: ..." \
+    --request POST \
+    --data @payload.json \
+    https://vault.rocks/v1/pki/euicc/my-role
+```
+
+### Sample Response
+
+```json
+{
+  "lease_id": "pki/issue/test/7ad6cfa5-f04f-c62a-d477-f33210475d05",
+  "renewable": false,
+  "lease_duration": 21600,
+  "data": {
+    "certificate": "-----BEGIN CERTIFICATE-----\nMIIDzDCCAragAwIBAgIUOd0ukLcjH43TfTHFG9qE0FtlMVgwCwYJKoZIhvcNAQEL\n...\numkqeYeO30g1uYvDuWLXVA==\n-----END CERTIFICATE-----\n",
+    "issuing_ca": "-----BEGIN CERTIFICATE-----\nMIIDUTCCAjmgAwIBAgIJAKM+z4MSfw2mMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV\n...\nG/7g4koczXLoUM3OQXd5Aq2cs4SS1vODrYmgbioFsQ3eDHd1fg==\n-----END CERTIFICATE-----\n",
+    "ca_chain": ["-----BEGIN CERTIFICATE-----\nMIIDUTCCAjmgAwIBAgIJAKM+z4MSfw2mMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV\n...\nG/7g4koczXLoUM3OQXd5Aq2cs4SS1vODrYmgbioFsQ3eDHd1fg==\n-----END CERTIFICATE-----\n"],
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAnVHfwoKsUG1GDVyWB1AFroaKl2ImMBO8EnvGLRrmobIkQvh+\n...\nQN351pgTphi6nlCkGPzkDuwvtxSxiCWXQcaxrHAL7MiJpPzkIBq1\n-----END RSA PRIVATE KEY-----\n",
+    "private_key_type": "rsa",
+    "serial_number": "39:dd:2e:90:b7:23:1f:8d:d3:7d:31:c5:1b:da:84:d0:5b:65:31:58"
+    },
+  "warnings": "",
+  "auth": null
+}
+```
+
+### Administrator Operations
+
+```bash
+# Mount the eum
+vault mount \
+-max-lease-ttl=876024h \
+-path=eum \
+-description="EUM role of Redtea Mobile, issuing eUICC certificates." \
+pki
+
+# Generate a self-signed EUM certificate
+vault write eum/root/generate/internal \
+ttl=876024h \
+key_type=ec \
+key_bits=256 \
+common_name="Redtea Consumer EUM" \
+organization="Redtea Mobile Inc." 
+
+# Set a role to issue eUICC certificate
+vault write eum/roles/worker-1 \
+max_ttl=876024h \
+allow_any_name=true \
+key_usage=digitalsignature \
+key_type=ec \
+key_bits=256 \
+organization="Redtea Mobile Inc." \
+server_flag=false \
+client_flag=false
+
+# issuing eUICC certificate
+vault write eum/euicc/worker-1 \
+ttl=876000h \
+common_name=eUICC \
+eid=89001012012341234012345678901224
 ```
 
 ## Revoke Certificate
